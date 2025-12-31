@@ -125,6 +125,16 @@ mempy/
 └── config.py      # Configuration
 ```
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Quick Start](doc/quickstart.md) | Get started in 5 minutes |
+| [API Reference](doc/api.md) | Complete API documentation |
+| [Adapter Guide](doc/adapter-guide.md) | Creating custom embedders |
+| [Benchmark Guide](doc/benchmark-guide.md) | Running evaluations |
+| [Project Guide](doc/project-guide.md) | Architecture and design (中文) |
+
 ## License
 
 MIT
