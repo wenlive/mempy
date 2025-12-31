@@ -1,5 +1,6 @@
 """NetworkX-based graph storage implementation."""
 
+import fcntl
 import json
 import pickle
 from pathlib import Path
@@ -20,17 +21,39 @@ class NetworkXGraphStore:
     - Relations between memories
     - Graph traversal (BFS/DFS)
     - Persistence to disk
+
+    Persistence Strategy:
+    - By default (auto_save=False), persistence is manual via save() or context manager
+    - Set auto_save=True to enable automatic saving after each write operation
+    - Set save_interval > 0 to save every N operations (requires auto_save=True)
+    - Set enable_file_lock=True for multi-process safety (Linux only)
     """
 
-    def __init__(self, persist_path: Path):
+    def __init__(
+        self,
+        persist_path: Path,
+        auto_save: bool = False,
+        save_interval: int = 0,
+        enable_file_lock: bool = False,
+    ):
         """
         Initialize the NetworkX graph store.
 
         Args:
             persist_path: Directory path for persistence
+            auto_save: If True, automatically save after write operations
+            save_interval: If > 0, save every N operations (requires auto_save=True)
+            enable_file_lock: If True, use fcntl file locks (Linux only)
         """
         self.persist_path = Path(persist_path)
         self.graph_path = self.persist_path / "graph.pkl"
+        self.auto_save = auto_save
+        self.save_interval = save_interval
+        self.enable_file_lock = enable_file_lock
+
+        # State tracking for lazy persistence
+        self._dirty = False
+        self._pending_writes = 0
 
         # Load existing graph or create new one
         self.graph = self._load_graph()
@@ -40,20 +63,68 @@ class NetworkXGraphStore:
         if self.graph_path.exists():
             try:
                 with open(self.graph_path, "rb") as f:
-                    return pickle.load(f)
+                    if self.enable_file_lock:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock for read
+                    data = pickle.load(f)
+                    if self.enable_file_lock:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    return data
             except Exception as e:
                 # If load fails, start fresh
                 return nx.DiGraph()
         return nx.DiGraph()
 
     def _save_graph(self) -> None:
-        """Save graph to disk."""
+        """Save graph to disk with optional file locking."""
         try:
             self.persist_path.mkdir(parents=True, exist_ok=True)
             with open(self.graph_path, "wb") as f:
+                if self.enable_file_lock:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock for write
                 pickle.dump(self.graph, f)
+                if self.enable_file_lock:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            self._dirty = False
+            self._pending_writes = 0
         except Exception as e:
             raise StorageError(f"Failed to save graph: {e}") from e
+
+    def _mark_dirty(self) -> None:
+        """
+        Mark the graph as dirty and trigger save if conditions are met.
+
+        This method is called internally after write operations.
+        The actual save occurs based on auto_save and save_interval settings.
+        """
+        self._dirty = True
+        self._pending_writes += 1
+
+        if self.auto_save:
+            if self.save_interval == 0:
+                # Save immediately after each operation
+                self._save_graph()
+            elif self._pending_writes >= self.save_interval:
+                # Save after N operations
+                self._save_graph()
+
+    async def save(self) -> None:
+        """
+        Manually trigger graph persistence to disk.
+
+        This method is useful when auto_save=False. It writes the current
+        graph state to disk, including all nodes and edges.
+        """
+        self._save_graph()
+
+    async def __aenter__(self):
+        """Context manager entry - return self."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - save pending changes."""
+        if self._dirty:
+            self._save_graph()
+        return False
 
     def _memory_to_node_attrs(self, memory: Memory) -> Dict[str, Any]:
         """Convert Memory to node attributes."""
@@ -108,7 +179,7 @@ class NetworkXGraphStore:
         """
         try:
             self.graph.add_node(memory_id, **self._memory_to_node_attrs(memory))
-            self._save_graph()
+            self._mark_dirty()
         except Exception as e:
             raise StorageError(f"Failed to add node to graph: {e}") from e
 
@@ -146,7 +217,7 @@ class NetworkXGraphStore:
             # Update node attributes
             for key, value in self._memory_to_node_attrs(memory).items():
                 self.graph.nodes[memory_id][key] = value
-            self._save_graph()
+            self._mark_dirty()
         except Exception as e:
             raise StorageError(f"Failed to update node: {e}") from e
 
@@ -163,7 +234,7 @@ class NetworkXGraphStore:
         try:
             if memory_id in self.graph.nodes:
                 self.graph.remove_node(memory_id)
-                self._save_graph()
+                self._mark_dirty()
         except Exception as e:
             raise StorageError(f"Failed to delete node: {e}") from e
 
@@ -198,7 +269,7 @@ class NetworkXGraphStore:
                 "metadata": json.dumps(metadata or {}),
             }
             self.graph.add_edge(from_id, to_id, **edge_attrs)
-            self._save_graph()
+            self._mark_dirty()
         except Exception as e:
             raise StorageError(f"Failed to add edge: {e}") from e
 
@@ -223,39 +294,72 @@ class NetworkXGraphStore:
             return []
 
         relations = []
-        seen = set()
 
         if direction in ["out", "both"]:
-            # Traverse outgoing edges
-            for target in nx.descendants_at_distance(self.graph, memory_id, max_depth):
-                if target not in seen:
-                    for _, v, data in self.graph.out_edges(memory_id, data=True):
-                        if max_depth == 1 or nx.has_path(self.graph, memory_id, v):
-                            rel = Relation(
-                                relation_id=f"{memory_id}-{v}",
-                                from_id=memory_id,
-                                to_id=v,
-                                type=RelationType(data["type"]),
-                                metadata=json.loads(data.get("metadata", "{}"))
-                            )
-                            relations.append(rel)
-                            seen.add(v)
+            # Get direct outgoing neighbors
+            if max_depth == 1:
+                for _, v, data in self.graph.out_edges(memory_id, data=True):
+                    rel = Relation(
+                        relation_id=f"{memory_id}-{v}",
+                        from_id=memory_id,
+                        to_id=v,
+                        type=RelationType(data["type"]),
+                        metadata=json.loads(data.get("metadata", "{}"))
+                    )
+                    relations.append(rel)
+            else:
+                # Traverse up to max_depth using BFS
+                visited = set()
+                current_level = {memory_id}
+                for _ in range(max_depth):
+                    next_level = set()
+                    for node in current_level:
+                        for _, v, data in self.graph.out_edges(node, data=True):
+                            if v not in visited:
+                                rel = Relation(
+                                    relation_id=f"{node}-{v}",
+                                    from_id=node,
+                                    to_id=v,
+                                    type=RelationType(data["type"]),
+                                    metadata=json.loads(data.get("metadata", "{}"))
+                                )
+                                relations.append(rel)
+                                visited.add(v)
+                                next_level.add(v)
+                    current_level = next_level
 
         if direction in ["in", "both"]:
-            # Traverse incoming edges
-            for source in nx.ancestors_at_distance(self.graph, memory_id, max_depth):
-                if source not in seen:
-                    for u, _, data in self.graph.in_edges(memory_id, data=True):
-                        if max_depth == 1 or nx.has_path(self.graph, u, memory_id):
-                            rel = Relation(
-                                relation_id=f"{u}-{memory_id}",
-                                from_id=u,
-                                to_id=memory_id,
-                                type=RelationType(data["type"]),
-                                metadata=json.loads(data.get("metadata", "{}"))
-                            )
-                            relations.append(rel)
-                            seen.add(u)
+            # Get direct incoming neighbors
+            if max_depth == 1:
+                for u, _, data in self.graph.in_edges(memory_id, data=True):
+                    rel = Relation(
+                        relation_id=f"{u}-{memory_id}",
+                        from_id=u,
+                        to_id=memory_id,
+                        type=RelationType(data["type"]),
+                        metadata=json.loads(data.get("metadata", "{}"))
+                    )
+                    relations.append(rel)
+            else:
+                # Traverse up to max_depth using BFS
+                visited = set()
+                current_level = {memory_id}
+                for _ in range(max_depth):
+                    next_level = set()
+                    for node in current_level:
+                        for u, _, data in self.graph.in_edges(node, data=True):
+                            if u not in visited:
+                                rel = Relation(
+                                    relation_id=f"{u}-{node}",
+                                    from_id=u,
+                                    to_id=node,
+                                    type=RelationType(data["type"]),
+                                    metadata=json.loads(data.get("metadata", "{}"))
+                                )
+                                relations.append(rel)
+                                visited.add(u)
+                                next_level.add(u)
+                    current_level = next_level
 
         return relations
 
@@ -313,6 +417,6 @@ class NetworkXGraphStore:
         """
         try:
             self.graph.clear()
-            self._save_graph()
+            self._mark_dirty()
         except Exception as e:
             raise StorageError(f"Failed to reset graph: {e}") from e

@@ -480,6 +480,49 @@ def _memory_to_metadata(self, memory: Memory) -> Dict[str, Any]:
 - 使用 `DiGraph` 有向图
 - 节点存储 Memory 的完整属性（不含 embedding）
 - 边存储 relation_type 和 metadata
+- Pickle 序列化持久化到 `graph.pkl`
+
+**持久化策略**（v0.2.0+）：
+
+图存储支持灵活的持久化策略，避免每次写操作都序列化：
+
+```python
+NetworkXGraphStore(
+    persist_path,
+    auto_save=False,        # 默认手动保存（破坏性变更）
+    save_interval=0,        # >0 时每 N 次操作保存一次
+    enable_file_lock=False  # Linux fcntl 文件锁
+)
+```
+
+**使用方式**：
+
+```python
+# 方式 1: 手动控制（批量导入场景）
+store = NetworkXGraphStore(path, auto_save=False)
+await store.add_node(...)
+await store.add_edge(...)
+await store.save()  # 手动保存
+
+# 方式 2: 定期保存（长运行服务）
+store = NetworkXGraphStore(path, auto_save=True, save_interval=100)
+# 每 100 次写操作自动保存一次
+
+# 方式 3: 上下文管理器（推荐）
+async with NetworkXGraphStore(path) as store:
+    await store.add_node(...)
+    await store.add_edge(...)
+# 退出时自动保存
+
+# 方式 4: 多进程安全（Linux only）
+store = NetworkXGraphStore(
+    path,
+    auto_save=True,
+    enable_file_lock=True  # fcntl 文件锁
+)
+```
+
+**节点和边属性**：
 
 ```python
 # 节点属性
@@ -500,7 +543,7 @@ edge_attrs = {
 **关系查询**：
 - 直接邻居：`graph.successors(id)` / `graph.predecessors(id)`
 - 路径查找：`nx.shortest_path(graph, from, to)`
-- 广度优先：`nx.descendants_at_distance()`
+- 深度遍历：BFS 手动实现（兼容旧版 NetworkX）
 
 ### 6.4 双写实现
 
@@ -702,7 +745,32 @@ memory = mempy.Memory(
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.2.0 | 2024-12 | 图存储持久化策略优化，新增单元测试 |
 | 0.1.0 | 2024-12 | MVP 版本，核心功能实现 |
+
+**v0.2.0 破坏性变更**：
+
+1. **NetworkXGraphStore 默认持久化策略变更**
+   - 旧版本：每次写操作自动序列化（`auto_save=True` 隐式）
+   - 新版本：默认手动保存（`auto_save=False` 显式）
+   - 迁移方式：
+     ```python
+     # 旧代码（不再自动持久化）
+     store = NetworkXGraphStore(path)
+     await store.add_node(...)
+
+     # 新代码（方式1：手动保存）
+     store = NetworkXGraphStore(path)
+     await store.add_node(...)
+     await store.save()
+
+     # 新代码（方式2：上下文管理器，推荐）
+     async with NetworkXGraphStore(path) as store:
+         await store.add_node(...)
+
+     # 新代码（方式3：恢复旧行为）
+     store = NetworkXGraphStore(path, auto_save=True)
+     ```
 
 ### B. 参考资料
 

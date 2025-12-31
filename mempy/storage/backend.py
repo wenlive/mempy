@@ -27,8 +27,8 @@ class OperationResult:
         timestamp: When the operation was performed
     """
 
-    success: bool
-    operation: str
+    success: bool = False
+    operation: str = ""
     vector_store_ok: Optional[bool] = None
     graph_store_ok: Optional[bool] = None
     error_message: Optional[str] = None

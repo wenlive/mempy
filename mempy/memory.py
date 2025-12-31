@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from mempy.core.interfaces import Embedder, MemoryProcessor
-from mempy.core.memory import Memory, RelationType
+from mempy.core.memory import Memory as MemoryData, RelationType
 from mempy.core.exceptions import StorageError
 from mempy.storage.backend import DualStorageBackend
 from mempy.config import get_storage_path
@@ -154,7 +154,7 @@ class Memory:
         embedding = await self.embedder.embed(content)
 
         # Create memory object
-        memory = Memory(
+        memory = MemoryData(
             memory_id=uuid4().hex,
             content=content,
             embedding=embedding,
@@ -178,7 +178,7 @@ class Memory:
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         limit: int = 10
-    ) -> List[Memory]:
+    ) -> List[MemoryData]:
         """
         Search for memories by semantic similarity.
 
@@ -206,7 +206,7 @@ class Memory:
 
         return results
 
-    async def get(self, memory_id: str) -> Optional[Memory]:
+    async def get(self, memory_id: str) -> Optional[MemoryData]:
         """
         Get a specific memory by ID.
 
@@ -223,7 +223,7 @@ class Memory:
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         limit: Optional[int] = None
-    ) -> List[Memory]:
+    ) -> List[MemoryData]:
         """
         Get all memories matching filters.
 

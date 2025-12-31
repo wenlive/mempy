@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Async Callable, List
+from typing import Any, Awaitable, Callable, List
 
 from mempy.processors.base import MemoryProcessor
 from mempy.core.memory import Memory, ProcessorResult
@@ -46,7 +46,7 @@ class LLMProcessor(MemoryProcessor):
 
     def __init__(
         self,
-        llm_call: Async Callable[[str], str],
+        llm_call: Callable[[str], Awaitable[str]],
         prompt_template: str = DEFAULT_PROCESSOR_PROMPT
     ):
         """
