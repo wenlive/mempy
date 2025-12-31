@@ -9,39 +9,92 @@ Evaluation framework for testing memory systems on standard datasets.
 ### Dataset
 
 - **Source**: ACL 2024, SNAP Research
-- **Size**: 10 very long conversations (~300 turns each)
+- **Size**: 10 very long conversations (~300 turns each, ~2.7MB)
 - **Tasks**: Question Answering + Event Summarization
 - **Website**: https://snap-research.github.io/locomo/
+- **Status**: Included in repo at `tests/benchmarks/data/locomo10.json`
 
-### Quick Start
+---
+
+## Quick Start
+
+### 1. Using Mock Embedder (Testing)
+
+Test the framework without a real model:
 
 ```bash
-# Download the dataset
-wget https://github.com/snap-research/locomo/raw/main/data/locomo10.json \
-    -O tests/benchmarks/data/locomo10.json
+python tests/benchmarks/adapters/examples/run_with_mock.py
+```
 
-# Run evaluation with mock embedder (for testing)
-python tests/benchmarks/locomo/run_evaluation.py \
-    --data-path tests/benchmarks/data/locomo10.json
+### 2. Using Qwen Models
 
-# Run with OpenAI embeddings
+For local Qwen models (Qwen3-235B-A22B, Qwen3-32B, etc.):
+
+```bash
+# Start vLLM server with Qwen model
+vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000
+
+# Run evaluation
+python tests/benchmarks/adapters/examples/run_with_qwen.py \
+    --base-url http://localhost:8000 \
+    --model-name Qwen/Qwen2.5-7B-Instruct
+```
+
+### 3. Using OpenAI Embeddings
+
+```bash
 pip install openai
+export OPENAI_API_KEY=your-key
+
 python tests/benchmarks/locomo/run_evaluation.py \
     --data-path tests/benchmarks/data/locomo10.json \
     --embedder openai \
     --output results.json
 ```
 
-### Using Your Own Embedder
+---
+
+## Model Adapters
+
+The benchmark framework includes pre-built adapters for common models:
+
+| Adapter | Models | Usage |
+|---------|--------|-------|
+| `MockEmbedder` | None (testing) | Free, deterministic vectors |
+| `QwenEmbedder` | Qwen3-235B, Qwen3-32B, Qwen2.5-7B | Local, via vLLM |
+| `OpenAIEmbedder` | text-embedding-3-small/large | Paid API |
+
+### Using Adapters
 
 ```python
-import asyncio
-from mempy.benchmarks.locomo import LOCOMODataset, LOCOMOEvaluator
+from tests.benchmarks.adapters import QwenEmbedder, MockEmbedder, OpenAIEmbedder
+
+# Qwen (local model)
+embedder = QwenEmbedder(
+    base_url="http://localhost:8000",
+    model_name="Qwen/Qwen2.5-7B-Instruct"
+)
+
+# Mock (testing only)
+embedder = MockEmbedder(dimension=768)
+
+# OpenAI (API key required)
+embedder = OpenAIEmbedder(api_key="your-key")
+```
+
+---
+
+## Embedder Interface
+
+All adapters implement the `mempy.Embedder` interface:
+
+```python
 from mempy import Embedder
+from typing import List
 
 class MyEmbedder(Embedder):
     def __init__(self):
-        self._dimension = 768
+        self._dimension = 768  # Must declare dimension
 
     @property
     def dimension(self) -> int:
@@ -50,26 +103,11 @@ class MyEmbedder(Embedder):
     async def embed(self, text: str) -> List[float]:
         # Your embedding logic here
         return await my_llm.embed(text)
-
-async def main():
-    # Load dataset
-    dataset = LOCOMODataset("tests/benchmarks/data/locomo10.json")
-
-    # Create evaluator
-    evaluator = LOCOMOEvaluator(
-        dataset=dataset,
-        embedder=MyEmbedder(),
-        verbose=True,
-    )
-
-    # Run evaluation
-    results = await evaluator.evaluate()
-    evaluator.print_results(results)
-
-asyncio.run(main())
 ```
 
-### Evaluation Metrics
+---
+
+## Evaluation Metrics
 
 | Metric | Description |
 |--------|-------------|
@@ -78,7 +116,9 @@ asyncio.run(main())
 | `qa_accuracy` | Question answering accuracy (lenient matching) |
 | `qa_f1` | Token-level F1 score for QA |
 
-### Comparison with mem0
+---
+
+## Comparison with mem0
 
 Our goal is to provide fair, reproducible benchmarking similar to [mem0](https://mem0.ai):
 
@@ -89,7 +129,9 @@ Our goal is to provide fair, reproducible benchmarking similar to [mem0](https:/
 
 *Results coming soon*
 
-### Citation
+---
+
+## Citation
 
 If you use LOCOMO in your research, please cite:
 
