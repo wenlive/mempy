@@ -2,6 +2,18 @@
 
 A memory management library with vector and graph storage, similar to [mem0](https://github.com/mem0ai/mem0).
 
+## 📊 Research Report
+
+**[Agent Memory 深度研究报告](Agent_Memory_深度研究报告.md)** - 基于对LangGraph、M3-Agent、PowerMem等前沿框架的深度调研，从数据库系统设计原则出发，对Agent Memory进行系统性重构分析。
+
+**核心观点**：
+- **演化（Evolution）是核心瓶颈**：记忆不是静态存储，而是动态的ETL过程
+- **"行为主义"优于"符号主义"**：提出基于共现关系的Memory Transition Graph（使用轨迹图）
+- **多模态的锚点效应**：高模态数据（语音/图像）天然充当Hub，是非结构化文本建立关联的关键
+- **数据库范式的冲突**：传统强Schema约束与LLM模糊性的根本矛盾
+
+---
+
 ## Features
 
 - **Zero Configuration**: pip install + import = ready to use
